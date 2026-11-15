@@ -91,3 +91,10 @@ Delete `chrome/JS/zen-mac-tab-switcher.uc.js`, then clear the startup cache in `
 - **Sine:** Sine uses its own loader in the same place (`config.js`, `chrome/utils`). Installing fx-autoconfig over it breaks Sine.
 - **Unloaded tabs** can't be rendered, so they show their favicon until you visit them again.
 - **Tested** with Zen 1.24.2b (Firefox 160) on Linux. It has not been run on macOS or Windows hardware.
+
+## Project info
+
+- **Description:** Just ctrl+tab and see the magic in Zen Browser
+- **Suggested GitHub topics:** `zen-browser`, `firefox`, `tab-switcher`, `ctrl-tab`, `userchrome`, `userchrome-js`, `fx-autoconfig`, `javascript`, `macos-style`, `go`, `windows-installer`
+- **Version:** 1.0.0 (see [CHANGELOG](CHANGELOG.md))
+- **License:** none specified yet. The bundled `installer/assets/fx/` files carry their own license (fx-autoconfig).
