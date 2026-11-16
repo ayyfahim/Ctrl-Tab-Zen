@@ -1,0 +1,11 @@
+{
+  "name": "zen-mac-tab-switcher-tests",
+  "private": true,
+  "description": "Behavior tests for zen-mac-tab-switcher.uc.js",
+  "scripts": {
+    "test": "node switcher.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^31.0.1"
+  }
+}

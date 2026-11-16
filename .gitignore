@@ -3,3 +3,7 @@ Thumbs.db
 *.log
 .idea/
 .vscode/
+
+# build output (installer/build.sh)
+dist/
+installer/rsrc_windows_*.syso

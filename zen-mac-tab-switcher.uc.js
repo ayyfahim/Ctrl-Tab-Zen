@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name            Zen Mac Tab Switcher
-// @version         1.0.0
+// @version         1.1.0
 // @description     macOS Cmd+Tab-style Ctrl+Tab switcher for Zen: glass HUD, live tab previews, spring animations.
 // @include         main
 // ==/UserScript==
@@ -176,6 +176,23 @@
         !(event.metaKey && AppConstants.platform != "win")
       );
     }
+  }
+
+  /**
+   * W or Q, like closing/quitting an app from the macOS switcher. Non-Latin
+   * layouts (Cyrillic, Greek...) report another letter in event.key, so fall
+   * back to the physical key there.
+   */
+  function isCloseKey(event) {
+    const key = event.key.toLowerCase();
+    if (key === "w" || key === "q") {
+      return true;
+    }
+    return (
+      key.length === 1 &&
+      !/[a-z]/.test(key) &&
+      (event.code === "KeyW" || event.code === "KeyQ")
+    );
   }
 
   function prefersReducedMotion(win) {
@@ -592,8 +609,10 @@
       this.win.addEventListener("deactivate", this);
       this.win.addEventListener("resize", this);
       this.win.addEventListener("unload", this, { once: true });
-      this.gBrowser.tabContainer.addEventListener("TabClose", this);
-      this.gBrowser.tabContainer.addEventListener("TabAttrModified", this);
+      // Tab events bubble to the window. Listening there also covers tabs Zen
+      // keeps outside gBrowser.tabContainer (Essentials, pinned tabs).
+      this.win.addEventListener("TabClose", this);
+      this.win.addEventListener("TabAttrModified", this);
     }
 
     destroy() {
@@ -605,8 +624,8 @@
       this.win.removeEventListener("deactivate", this);
       this.win.removeEventListener("resize", this);
       this.win.removeEventListener("unload", this);
-      this.gBrowser?.tabContainer?.removeEventListener("TabClose", this);
-      this.gBrowser?.tabContainer?.removeEventListener("TabAttrModified", this);
+      this.win.removeEventListener("TabClose", this);
+      this.win.removeEventListener("TabAttrModified", this);
       this.root?.remove();
       this.style?.remove();
       this.thumbs.clear();
@@ -731,7 +750,7 @@
           this.closeSelected();
           break;
         default:
-          if (["w", "q"].includes(event.key.toLowerCase())) {
+          if (isCloseKey(event)) {
             this.closeSelected();
           }
       }
@@ -1019,7 +1038,11 @@
         this.closeTab(item._tab);
         return;
       }
-      // Primary click, or Ctrl+click on macOS which arrives as button 2.
+      // Primary click, or Ctrl+click on macOS which arrives as button 2. A
+      // real right click elsewhere does nothing.
+      if (event.button === 2 && AppConstants.platform !== "macosx") {
+        return;
+      }
       this.index = this.items.indexOf(item);
       this.finish(true);
     }

@@ -1,0 +1,102 @@
+name: Release
+
+# Push a tag like v1.1.0 to publish a release with every installer attached.
+# The version in the tag must match "@version" in zen-mac-tab-switcher.uc.js,
+# and CHANGELOG.md needs a "## 1.1.0" section (it becomes the release notes).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re)build, e.g. v1.1.0
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: installer/go.mod
+          cache-dependency-path: installer/go.sum
+      - run: go test ./...
+        working-directory: installer
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: installer/go.mod
+          cache-dependency-path: installer/go.sum
+
+      - name: Check the version
+        run: |
+          version="${TAG#v}"
+          script_version="$(sed -n 's|^// @version *||p' zen-mac-tab-switcher.uc.js | head -1)"
+          if [ "$version" != "$script_version" ]; then
+            echo "::error::Tag $TAG does not match @version $script_version in zen-mac-tab-switcher.uc.js"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          go install github.com/tc-hib/go-winres@v0.3.3
+          installer/build.sh
+
+      - name: Write release notes
+        run: |
+          notes="$(awk -v v="## $VERSION" '$0 == v { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md)"
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          cat > notes.md <<EOF
+          ## Install
+
+          Close Zen first. The installers find Zen and your profile by themselves; run them again to update or uninstall.
+
+          | System | Download | How |
+          | --- | --- | --- |
+          | **Windows** (x64) | [ZenMacTabSwitcher-Setup.exe]($base/ZenMacTabSwitcher-Setup.exe) | Run it and click **OK** |
+          | **Windows** (ARM) | [ZenMacTabSwitcher-Setup-arm64.exe]($base/ZenMacTabSwitcher-Setup-arm64.exe) | Run it and click **OK** |
+          | **macOS** | [ZenMacTabSwitcher-macOS.zip]($base/ZenMacTabSwitcher-macOS.zip) | Unzip, right-click **Install Zen Mac Tab Switcher.command** → **Open** |
+          | **macOS / Linux** | Terminal | \`curl -fsSL https://github.com/$GITHUB_REPOSITORY/releases/latest/download/install.sh \| bash\` |
+
+          Prefer to set it up by hand? Download \`zen-mac-tab-switcher.uc.js\` and follow the [manual steps](https://github.com/$GITHUB_REPOSITORY#install-by-hand).
+
+          ## What's new
+
+          $notes
+
+          ---
+          Checksums: \`SHA256SUMS\` (the terminal installer checks them automatically).
+          EOF
+          cat notes.md
+
+      - name: Publish
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" dist/* --title "Zen Mac Tab Switcher $VERSION" --notes-file notes.md --verify-tag
+          fi

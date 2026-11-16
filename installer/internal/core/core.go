@@ -88,6 +88,38 @@ func Install(assets fs.FS, t Target, part Part, log Logger) error {
 	return nil
 }
 
+// InstallDirChangeNeeded reports whether Install or Uninstall would change
+// anything in the install dir. When it wouldn't, the caller can skip asking
+// for administrator rights (for example on an update that only ships a new
+// script).
+func InstallDirChangeNeeded(assets fs.FS, t Target, uninstall bool) bool {
+	files := map[string]string{
+		"fx/config.js":                     filepath.Join(t.InstallDir, "config.js"),
+		"fx/defaults/pref/config-prefs.js": filepath.Join(t.InstallDir, "defaults", "pref", "config-prefs.js"),
+	}
+	if uninstall {
+		if anyProfileUsesLoader(t) {
+			return false
+		}
+		for _, dst := range files {
+			if fileExists(dst) || fileExists(dst+backupExt) {
+				return true
+			}
+		}
+		return false
+	}
+	for name, dst := range files {
+		want, err := fs.ReadFile(assets, name)
+		if err != nil {
+			return true
+		}
+		if have, err := os.ReadFile(dst); err != nil || !bytes.Equal(have, want) {
+			return true
+		}
+	}
+	return false
+}
+
 // CheckSine returns ErrSine if Sine's bootloader is set up in this Zen. It only
 // reads files, so it works without administrator rights.
 func CheckSine(t Target) error {
@@ -197,17 +229,40 @@ func Uninstall(t Target, part Part, log Logger) error {
 	if part.dir() && t.InstallDir != "" {
 		// Leave the loader in place if some other profile still has scripts.
 		if !anyProfileUsesLoader(t) {
-			for _, p := range []string{
-				filepath.Join(t.InstallDir, "config.js"),
-				filepath.Join(t.InstallDir, "defaults", "pref", "config-prefs.js"),
-			} {
-				if err := removeFile(p, log); err != nil {
-					return err
-				}
+			cfg := filepath.Join(t.InstallDir, "config.js")
+			prefs := filepath.Join(t.InstallDir, "defaults", "pref", "config-prefs.js")
+			restored, err := restoreOrRemove(cfg, log)
+			if err != nil {
+				return err
+			}
+			// A restored config.js is the user's own autoconfig, and it needs
+			// config-prefs.js to keep loading. Only remove the prefs file
+			// when config.js is gone too.
+			if fileExists(prefs + backupExt) {
+				_, err = restoreOrRemove(prefs, log)
+			} else if !restored {
+				err = removeFile(prefs, log)
+			}
+			if err != nil {
+				return err
 			}
 		}
 	}
 	return nil
+}
+
+// restoreOrRemove puts back the backup Install made of path, or removes path
+// when there is no backup. It reports whether a backup was restored.
+func restoreOrRemove(path string, log Logger) (bool, error) {
+	backup := path + backupExt
+	if fileExists(backup) {
+		if err := os.Rename(backup, path); err != nil {
+			return false, err
+		}
+		log.printf("Restored %s", path)
+		return true, nil
+	}
+	return false, removeFile(path, log)
 }
 
 func loaderStillUsed(chrome string) bool {
@@ -228,8 +283,9 @@ func loaderStillUsed(chrome string) bool {
 }
 
 func anyProfileUsesLoader(t Target) bool {
-	// The profile half already ran for the default profile. Other profiles under
-	// the same profiles root might still use the loader.
+	// Our own script doesn't count (see loaderStillUsed), so this gives the same
+	// answer before or after the profile half runs. Other profiles under the
+	// same profiles root might still use the loader.
 	if t.ProfileDir == "" {
 		return true // can't tell, so keep the loader
 	}
@@ -323,7 +379,8 @@ func FindProfile(appData, localAppData string) (Profile, error) {
 			if prof, ok := byPath[norm(p)]; ok {
 				cands = append(cands, resolve(prof.Keys["Path"], prof.Keys["IsRelative"] != "0"))
 			} else {
-				cands = append(cands, resolve(p, true))
+				// Install sections store absolute paths for non-relative profiles.
+				cands = append(cands, resolve(p, !filepath.IsAbs(filepath.FromSlash(p))))
 			}
 		}
 	}
@@ -359,6 +416,42 @@ func FindProfile(appData, localAppData string) (Profile, error) {
 	return existing[0], nil
 }
 
+// ProfileRoot is a folder that may hold profiles.ini (AppData) together with
+// the folder that holds the matching profile caches (Local).
+type ProfileRoot struct {
+	AppData string
+	Local   string
+}
+
+// FindProfileIn runs FindProfile on every root and returns the most recently
+// used profile. Linux needs this: Zen keeps profiles in ~/.zen for older
+// installs and in ~/.config/zen for newer ones.
+func FindProfileIn(roots []ProfileRoot) (Profile, error) {
+	var (
+		best     Profile
+		bestTime time.Time
+		found    bool
+		errs     []error
+	)
+	for _, r := range roots {
+		p, err := FindProfile(r.AppData, r.Local)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if t := lastUsed(p.Dir); !found || t.After(bestTime) {
+			best, bestTime, found = p, t, true
+		}
+	}
+	if !found {
+		if len(errs) == 0 {
+			return Profile{}, errors.New("no profile folder to look in")
+		}
+		return Profile{}, errors.Join(errs...)
+	}
+	return best, nil
+}
+
 func lastUsed(profileDir string) time.Time {
 	var newest time.Time
 	for _, n := range []string{"prefs.js", "sessionstore.jsonlz4", "places.sqlite", "zen-sessions.jsonlz4"} {
@@ -382,8 +475,10 @@ func copyAsset(assets fs.FS, name, dst string, log Logger) error {
 		if bytes.Equal(old, data) {
 			return nil
 		}
-		// Back up anything of the user's we are about to replace (once).
-		if !isOurs(name) {
+		// Back up a file of the user's we are about to replace. Only the first
+		// time: on later updates the file on disk is our own older copy, and
+		// overwriting the backup would lose the user's original.
+		if !isOurs(name) && !isLoaderFile(name, old) && !fileExists(dst+backupExt) {
 			if err := os.WriteFile(dst+backupExt, old, 0o644); err != nil {
 				return err
 			}
@@ -403,6 +498,21 @@ func copyAsset(assets fs.FS, name, dst string, log Logger) error {
 // isOurs reports assets we ship (so replacing an older copy needs no backup).
 func isOurs(name string) bool {
 	return name == ScriptName || strings.HasPrefix(name, "fx/utils/")
+}
+
+// isLoaderFile reports whether old is already an fx-autoconfig program file
+// (for example from an older version of this installer). Replacing it with a
+// newer copy changes nothing for the user, so it needs no backup.
+func isLoaderFile(name string, old []byte) bool {
+	switch name {
+	case "fx/config.js":
+		return bytes.Contains(old, []byte("chrome://userchromejs/content/boot.sys.mjs"))
+	case "fx/defaults/pref/config-prefs.js":
+		return bytes.Contains(old, []byte("general.config.filename")) &&
+			bytes.Contains(old, []byte(`"config.js"`)) &&
+			bytes.Contains(old, []byte("general.config.sandbox_enabled"))
+	}
+	return false
 }
 
 func removeFile(path string, log Logger) error {
