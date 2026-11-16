@@ -28,21 +28,59 @@ A macOS Cmd+Tab–style Ctrl+Tab switcher for [Zen Browser](https://zen-browser.
 | Middle click | Close that tab |
 | Esc | Cancel |
 
-## Install (Windows, one click)
+## Install
 
-Run `installer/ZenMacTabSwitcher-Setup.exe`. It finds Zen and your profile by itself, installs everything, and clears Zen's startup cache.
+**[Download the latest release](https://github.com/ayyfahim/Ctrl-Tab-Zen/releases/latest)** and close Zen first. Every installer finds Zen and your profile by itself, installs everything and clears Zen's startup cache. Run it again to **update** or **uninstall** (it asks which).
 
-1. Close Zen.
-2. Run the installer and click **OK**. If Zen is in `Program Files`, Windows asks for administrator permission once.
-3. Start Zen, hold Ctrl and press Tab.
+| System | Download | How |
+| --- | --- | --- |
+| Windows (x64) | `ZenMacTabSwitcher-Setup.exe` | Run it and click **OK** |
+| Windows (ARM) | `ZenMacTabSwitcher-Setup-arm64.exe` | Run it and click **OK** |
+| macOS | `ZenMacTabSwitcher-macOS.zip` | Unzip, right-click **Install Zen Mac Tab Switcher.command** → **Open** |
+| macOS / Linux | one terminal command | see below |
 
-Run it again to **update** or **uninstall** (it asks which). Uninstalling keeps the loader if you have other userChrome scripts.
+Then start Zen, hold Ctrl and press Tab.
 
-It finds Zen through the running process, Windows' installed-apps list, Zen's registry keys and the default folders. Options: `/S` (silent), `/uninstall`, `--zen-dir "C:\path\to\Zen Browser"`, `--profile "C:\path\to\profile"`. It refuses to run if Zen is open or if Sine is installed, and changes nothing in those cases.
+### macOS and Linux: one command
 
-Build it yourself with `installer/build.sh` (Go 1.25+, works from Linux, macOS or Windows).
+```sh
+curl -fsSL https://github.com/ayyfahim/Ctrl-Tab-Zen/releases/latest/download/install.sh | bash
+```
 
-## Install by hand (macOS, Linux, or without the installer)
+Don't run it with `sudo`. If Zen's program folder belongs to the system (for example `/opt/zen-browser-bin` from the AUR), it asks for your password itself, and only for that folder. Your profile files stay yours. Downloads are checked against the release's `SHA256SUMS`.
+
+Pass options after `bash -s --`:
+
+```sh
+curl -fsSL https://github.com/ayyfahim/Ctrl-Tab-Zen/releases/latest/download/install.sh | bash -s -- --uninstall
+```
+
+It finds Zen through the running process, launchers on `PATH`, desktop entries and the usual folders (`~/.tarball-installations/zen` from Zen's own install script, `/opt`, `/usr/lib`, `/Applications`, Spotlight on macOS). Profiles are looked up in `~/.zen`, `~/.config/zen` and `~/Library/Application Support/zen`.
+
+- **macOS:** if it says macOS blocked the change to Zen.app, open **System Settings → Privacy & Security → App Management**, turn on your terminal app, and run it again. Zen updates replace Zen.app and remove the loader; run the installer again after each update and it offers to repair it.
+- **Linux Flatpak, Snap and AppImage** can't be used: their program folders are read-only (see [Things to know](#things-to-know)). Use the tarball version of Zen.
+
+### Windows
+
+If Zen is in `Program Files`, Windows asks for administrator permission once. It finds Zen through the running process, Windows' installed-apps list, Zen's registry keys and the default folders. It refuses to run if Zen is open or if Sine is installed, and changes nothing in those cases.
+
+### Options (all installers)
+
+| Option | Meaning |
+| --- | --- |
+| `/S` (Windows), `-y` / `--yes` (macOS, Linux) | No questions: install, or update if already installed |
+| `--uninstall` | Remove instead of install |
+| `--zen-dir DIR` | Zen's program folder (`C:\path\to\Zen Browser`, `/Applications/Zen.app`, `~/zen`) |
+| `--profile DIR` | Zen profile folder |
+| `--help`, `--version` | |
+
+Uninstalling keeps the loader if you have other userChrome scripts, and puts back any `config.js` the installer replaced.
+
+### Build it yourself
+
+`installer/build.sh` builds every release file into `dist/` (Go 1.25+, works from Linux, macOS or Windows). Install [go-winres](https://github.com/tc-hib/go-winres) for the Windows icon.
+
+## Install by hand
 
 Zen has no built-in way to run custom scripts, so this uses [fx-autoconfig](https://github.com/MrOtherGuy/fx-autoconfig), the standard userChrome.js loader for Firefox-based browsers.
 
@@ -82,19 +120,21 @@ Zen's own settings in **Settings → Tabs** also apply: "Ignore Pending tabs whe
 
 ## Uninstall
 
-Delete `chrome/JS/zen-mac-tab-switcher.uc.js`, then clear the startup cache in `about:support`. To remove fx-autoconfig as well, delete `config.js` and `defaults/pref/config-prefs.js` from Zen's install folder and `chrome/utils` from the profile.
+Run the installer again and choose **uninstall** (or pass `--uninstall`). By hand: delete `chrome/JS/zen-mac-tab-switcher.uc.js`, then clear the startup cache in `about:support`. To remove fx-autoconfig as well, delete `config.js` and `defaults/pref/config-prefs.js` from Zen's install folder and `chrome/utils` from the profile.
 
 ## Things to know
 
-- **Zen updates:** updating Zen on macOS replaces Zen.app and removes `config.js` and `config-prefs.js`. Copy them back after each update (step 3). The files in your profile are kept.
-- **Flatpak (Linux):** the install folder is read-only, so step 3 isn't possible there.
+- **Zen updates:** updating Zen on macOS replaces Zen.app and removes `config.js` and `config-prefs.js`. Run the installer again after each update (or copy them back by hand, step 3). The files in your profile are kept.
+- **Flatpak, Snap and AppImage (Linux):** the install folder is read-only, so the loader can't be added. Use the tarball version of Zen ([Zen's Linux guide](https://docs.zen-browser.app/guides/install-linux)).
 - **Sine:** Sine uses its own loader in the same place (`config.js`, `chrome/utils`). Installing fx-autoconfig over it breaks Sine.
 - **Unloaded tabs** can't be rendered, so they show their favicon until you visit them again.
-- **Tested** with Zen 1.24.2b (Firefox 160) on Linux. It has not been run on macOS or Windows hardware.
+- **Tested** with Zen 1.24.2b (Firefox 160) on Linux. The switcher has not been run on macOS or Windows hardware. The installers' logic is tested on all three systems in CI, but the macOS installer has not been tried against a real Zen.app yet.
 
 ## Project info
 
 - **Description:** Just ctrl+tab and see the magic in Zen Browser
 - **Suggested GitHub topics:** `zen-browser`, `firefox`, `tab-switcher`, `ctrl-tab`, `userchrome`, `userchrome-js`, `fx-autoconfig`, `javascript`, `macos-style`, `go`, `windows-installer`
-- **Version:** 1.0.0 (see [CHANGELOG](CHANGELOG.md))
+- **Version:** 1.1.0 (see [CHANGELOG](CHANGELOG.md))
+- **Tests:** `cd installer && go test ./...` and `cd tests/userscript && npm ci && npm test`. CI runs both on every pull request.
+- **Releasing:** bump `@version` in `zen-mac-tab-switcher.uc.js`, add a `## x.y.z` section to the CHANGELOG, then push a tag `vx.y.z`. GitHub Actions tests, builds and publishes the release with all installers attached.
 - **License:** none specified yet. The bundled `installer/assets/fx/` files carry their own license (fx-autoconfig).

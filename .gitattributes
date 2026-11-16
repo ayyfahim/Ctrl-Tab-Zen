@@ -4,3 +4,4 @@
 *.syso binary
 *.png binary
 *.gif binary
+*.command text eol=lf

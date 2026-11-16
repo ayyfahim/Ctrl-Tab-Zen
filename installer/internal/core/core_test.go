@@ -244,3 +244,158 @@ func TestFindProfileSingleAndErrors(t *testing.T) {
 		t.Fatal("want an error when the profile folder is missing")
 	}
 }
+
+// realisticAssets look like the real fx-autoconfig files, so the installer can
+// tell an older copy of its own loader from a user's file.
+func realisticAssets(version string) fstest.MapFS {
+	a := assets()
+	a["fx/config.js"] = &fstest.MapFile{Data: []byte("// " + version + "\nChromeUtils.importESModule('chrome://userchromejs/content/boot.sys.mjs');")}
+	a["fx/defaults/pref/config-prefs.js"] = &fstest.MapFile{Data: []byte("// " + version + "\n" +
+		`pref("general.config.filename", "config.js");` + "\n" + `pref("general.config.sandbox_enabled", false);`)}
+	return a
+}
+
+func TestUpdateKeepsTheFirstBackupAndUninstallRestoresIt(t *testing.T) {
+	tg := newTarget(t)
+	cfg := filepath.Join(tg.InstallDir, "config.js")
+	prefs := filepath.Join(tg.InstallDir, "defaults", "pref", "config-prefs.js")
+	mustWrite(t, cfg, "// the user's own autoconfig")
+	mustWrite(t, prefs, `pref("general.config.filename", "config.js");`)
+
+	if err := Install(realisticAssets("v1"), tg, PartAll, nil); err != nil {
+		t.Fatal(err)
+	}
+	// An update ships a newer config.js. The backup must still hold the
+	// user's file, not our v1.
+	if err := Install(realisticAssets("v2"), tg, PartAll, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, cfg+backupExt); got != "// the user's own autoconfig" {
+		t.Fatalf("backup overwritten: %q", got)
+	}
+
+	if err := Uninstall(tg, PartAll, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, cfg); got != "// the user's own autoconfig" {
+		t.Fatalf("config.js not restored: %q", got)
+	}
+	if got := read(t, prefs); got != `pref("general.config.filename", "config.js");` {
+		t.Fatalf("config-prefs.js not restored: %q", got)
+	}
+	for _, p := range []string{cfg + backupExt, prefs + backupExt} {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("backup left behind: %s", p)
+		}
+	}
+}
+
+func TestUninstallKeepsPrefsNeededByRestoredConfig(t *testing.T) {
+	tg := newTarget(t)
+	cfg := filepath.Join(tg.InstallDir, "config.js")
+	prefs := filepath.Join(tg.InstallDir, "defaults", "pref", "config-prefs.js")
+	mustWrite(t, cfg, "// the user's own autoconfig")
+
+	if err := Install(realisticAssets("v1"), tg, PartAll, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := Uninstall(tg, PartAll, nil); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, cfg) != "// the user's own autoconfig" {
+		t.Fatal("config.js not restored")
+	}
+	if _, err := os.Stat(prefs); err != nil {
+		t.Fatal("config-prefs.js removed although the restored config.js needs it")
+	}
+}
+
+func TestUpdateOfOwnLoaderMakesNoBackup(t *testing.T) {
+	tg := newTarget(t)
+	if err := Install(realisticAssets("v1"), tg, PartAll, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(realisticAssets("v2"), tg, PartAll, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(tg.InstallDir, "config.js"+backupExt)); err == nil {
+		t.Fatal("our own older config.js was backed up")
+	}
+	if err := Uninstall(tg, PartAll, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{
+		filepath.Join(tg.InstallDir, "config.js"),
+		filepath.Join(tg.InstallDir, "defaults", "pref", "config-prefs.js"),
+	} {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("still exists after uninstall: %s", p)
+		}
+	}
+}
+
+func TestFindProfileAbsoluteInstallDefault(t *testing.T) {
+	root := t.TempDir()
+	abs := filepath.Join(root, "custom profile")
+	mustMkdir(t, abs)
+	mustWrite(t, filepath.Join(root, "profiles.ini"), "[Install99]\nDefault="+filepath.ToSlash(abs)+"\n")
+	p, err := FindProfile(root, filepath.Join(root, "L"))
+	if err != nil || p.Dir != abs {
+		t.Fatalf("got %+v, %v; want %s", p, err, abs)
+	}
+}
+
+func TestFindProfileInPicksMostRecentRoot(t *testing.T) {
+	root := t.TempDir()
+	legacy, xdg := filepath.Join(root, ".zen"), filepath.Join(root, ".config", "zen")
+	for _, r := range []string{legacy, xdg} {
+		mustMkdir(t, filepath.Join(r, "p.Default"))
+		mustWrite(t, filepath.Join(r, "profiles.ini"), "[Profile0]\nIsRelative=1\nPath=p.Default\nDefault=1\n")
+		mustWrite(t, filepath.Join(r, "p.Default", "prefs.js"), "")
+	}
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(filepath.Join(legacy, "p.Default", "prefs.js"), old, old)
+
+	cache := filepath.Join(root, ".cache", "zen")
+	p, err := FindProfileIn([]ProfileRoot{
+		{AppData: legacy, Local: cache},
+		{AppData: xdg, Local: cache},
+		{AppData: filepath.Join(root, "missing"), Local: cache},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Dir != filepath.Join(xdg, "p.Default") || p.LocalDir != filepath.Join(cache, "p.Default") {
+		t.Fatalf("got %+v", p)
+	}
+	if _, err := FindProfileIn([]ProfileRoot{{AppData: filepath.Join(root, "missing")}}); err == nil {
+		t.Fatal("want an error when no root has profiles.ini")
+	}
+}
+
+func TestInstallDirChangeNeeded(t *testing.T) {
+	tg := newTarget(t)
+	a := realisticAssets("v1")
+	if !InstallDirChangeNeeded(a, tg, false) {
+		t.Fatal("fresh install must change the install dir")
+	}
+	if InstallDirChangeNeeded(a, tg, true) {
+		t.Fatal("nothing to uninstall yet")
+	}
+	if err := Install(a, tg, PartAll, nil); err != nil {
+		t.Fatal(err)
+	}
+	if InstallDirChangeNeeded(a, tg, false) {
+		t.Fatal("reinstalling the same loader changes nothing")
+	}
+	if !InstallDirChangeNeeded(realisticAssets("v2"), tg, false) {
+		t.Fatal("a newer loader must be written")
+	}
+	if !InstallDirChangeNeeded(a, tg, true) {
+		t.Fatal("uninstall must remove the loader")
+	}
+	mustWrite(t, filepath.Join(tg.ProfileDir, "chrome", "JS", "other.uc.js"), "")
+	if InstallDirChangeNeeded(a, tg, true) {
+		t.Fatal("uninstall keeps the loader while another script uses it")
+	}
+}

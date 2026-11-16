@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    name: Installer (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: installer
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: installer/go.mod
+          cache-dependency-path: installer/go.sum
+      - name: Check formatting
+        if: runner.os == 'Linux'
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: Bundled script is up to date
+        if: runner.os == 'Linux'
+        run: cmp ../zen-mac-tab-switcher.uc.js assets/zen-mac-tab-switcher.uc.js
+      - run: go vet ./...
+      - run: go test ./...
+
+  userscript:
+    name: Userscript
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests/userscript
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: tests/userscript/package-lock.json
+      - run: node --check ../../zen-mac-tab-switcher.uc.js
+      - run: npm ci
+      - run: npm test
+
+  build:
+    name: Release build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: installer/go.mod
+          cache-dependency-path: installer/go.sum
+      - run: go install github.com/tc-hib/go-winres@v0.3.3
+      - run: for f in installer/install.sh installer/macos/*.command; do bash -n "$f"; done
+      - run: installer/build.sh

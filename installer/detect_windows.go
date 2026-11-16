@@ -12,12 +12,6 @@ import (
 
 const zenExe = "zen.exe"
 
-// zenInstall is one place Zen is installed, with how we found it.
-type zenInstall struct {
-	Dir    string
-	Source string
-}
-
 // findZenInstalls returns every distinct Zen program folder it can find,
 // most reliable source first. A folder only counts if it contains zen.exe.
 func findZenInstalls() []zenInstall {
@@ -32,7 +26,7 @@ func findZenInstalls() []zenInstall {
 		if seen[key] {
 			return
 		}
-		if st, err := os.Stat(filepath.Join(dir, zenExe)); err != nil || st.IsDir() {
+		if !fileExistsAt(filepath.Join(dir, zenExe)) {
 			return
 		}
 		seen[key] = true
@@ -160,16 +154,4 @@ func isZenRunningFrom(dir string) bool {
 		}
 	}
 	return false
-}
-
-// canWrite reports whether files can be created in dir without elevation.
-func canWrite(dir string) bool {
-	f, err := os.CreateTemp(dir, ".zmts-write-test-*")
-	if err != nil {
-		return false
-	}
-	name := f.Name()
-	f.Close()
-	os.Remove(name)
-	return true
 }
